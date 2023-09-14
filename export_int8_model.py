@@ -6,7 +6,6 @@ from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModel
 
-from smoothquant.opt import Int8OPTForCausalLM
 from smoothquant.smooth import smooth_lm
 
 from smoothquant.calibration import get_static_decoder_layer_scales
@@ -24,8 +23,8 @@ if __name__ == '__main__':
                         help='location of the calibration dataset')
     parser.add_argument('--export-FT', default=False, action="store_true")
     args = parser.parse_args()
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(args.model_path, device_map="auto", trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     act_scales = torch.load(args.act_scales)
     smooth_lm(model, act_scales, args.alpha)
 
@@ -38,15 +37,17 @@ if __name__ == '__main__':
                                                                        args.dataset_path,
                                                                        num_samples=args.num_samples,
                                                                        seq_len=args.seq_len)
-    output_path = Path(args.output_path) / (Path(args.model_name).name + "-sq.pt")
+    output_path = Path(args.output_path) / 'auto-model'
     if args.export_FT:
         model.save_pretrained(output_path)
         print(f"Saved smoothed model at {output_path}")
 
-        output_path = Path(args.output_path) / (Path(args.model_name).name + "-sq-scales.pt")
+        output_path = Path(args.output_path) / (Path(args.model_path).name + "-sq-scales.pt")
         torch.save(raw_scales, output_path)
         print(f"Saved scaling factors at {output_path}")
     else:
+        from smoothquant.opt import Int8OPTForCausalLM
+
         int8_model = Int8OPTForCausalLM.from_float(model, decoder_layer_scales)
         int8_model.save_pretrained(output_path)
         print(f"Saved int8 model at {output_path}")

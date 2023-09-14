@@ -40,7 +40,7 @@ def get_act_scales(model, tokenizer, dataset_path, num_samples=512, seq_len=512)
     dataset = load_dataset("json", data_files=dataset_path, split="train")
     dataset = dataset.shuffle(seed=42)
 
-    for i in tqdm(range(num_samples)):
+    for i in tqdm(range(min(num_samples, len(dataset)))):
         input_ids = tokenizer(dataset[i]["text"], return_tensors="pt",
                               max_length=seq_len, truncation=True).input_ids.to(device)
         model(input_ids)
@@ -64,6 +64,7 @@ def get_static_decoder_layer_scales(model,
     act_dict = defaultdict(dict)
 
     def stat_io_hook(m, x, y, name):
+        print('hooking! ' + name)
         if isinstance(x, tuple):
             x = x[0]
         if name not in act_dict or "input" not in act_dict[name]:
@@ -86,8 +87,8 @@ def get_static_decoder_layer_scales(model,
                 partial(stat_io_hook, name=name)))
 
     print("Collecting activation scales...")
-    pbar = tqdm(range(num_samples))
     dataset = load_dataset('json', data_files=dataset_path, split="train")
+    pbar = tqdm(range(min(num_samples, len(dataset))))
     dataset = dataset.shuffle(seed=42)
     for i in pbar:
         input_ids = tokenizer(dataset[i]["text"], return_tensors="pt",
@@ -99,22 +100,16 @@ def get_static_decoder_layer_scales(model,
         hook.remove()
 
     decoder_layer_scales = []
-    for idx in range(model.config.num_hidden_layers):
+    for idx in range(model.config.num_layers):
         scale_dict = {}
-        scale_dict["attn_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.q_proj"]['input'] / 127
-        scale_dict["q_output_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.q_proj"]['output'] / 127
-        scale_dict["k_output_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.k_proj"]['output'] / 127
-        scale_dict["v_output_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.v_proj"]['output'] / 127
-        scale_dict["out_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.self_attn.out_proj"]['input'] / 127
-        scale_dict["fc1_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.fc1"]['input'] / 127
-        scale_dict["fc2_input_scale"] = act_dict[
-            f"model.decoder.layers.{idx}.fc2"]["input"] / 127
+        scale_dict["qkv_input_scale"] = act_dict[
+            f"transformer.encoder.layers.{idx}.self_attention.query_key_value"]['input'] / 127
+        scale_dict["sa_out_input_scale"] = act_dict[
+            f"transformer.encoder.layers.{idx}.self_attention.dense"]['input'] / 127
+        scale_dict["up_input_scale"] = act_dict[
+            f"transformer.encoder.layers.{idx}.mlp.dense_h_to_4h"]['input'] / 127
+        scale_dict["down_input_scale"] = act_dict[
+            f"transformer.encoder.layers.{idx}.mlp.dense_4h_to_h"]["input"] / 127
         decoder_layer_scales.append(scale_dict)
 
     return decoder_layer_scales, act_dict

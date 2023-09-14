@@ -3,13 +3,15 @@ import torch.nn as nn
 
 from transformers.models.opt.modeling_opt import OPTDecoderLayer
 from transformers.models.bloom.modeling_bloom import BloomBlock
+from chatglm.modeling_chatglm import GLMBlock
 
 
 @torch.no_grad()
 def smooth_ln_fcs(ln, fcs, act_scales, alpha=0.5):
     if not isinstance(fcs, list):
         fcs = [fcs]
-    assert isinstance(ln, nn.LayerNorm)
+    # TODO(xunkai): Get rid of this hack
+    assert isinstance(ln, nn.LayerNorm) or ln.__class__.__name__ == 'RMSNorm'
     for fc in fcs:
         assert isinstance(fc, nn.Linear)
         assert ln.weight.numel() == fc.in_features == act_scales.numel()
@@ -24,7 +26,8 @@ def smooth_ln_fcs(ln, fcs, act_scales, alpha=0.5):
               ).clamp(min=1e-5).to(device).to(dtype)
 
     ln.weight.div_(scales)
-    ln.bias.div_(scales)
+    if hasattr(ln, 'bias'):
+        ln.bias.div_(scales)
 
     for fc in fcs:
         fc.weight.mul_(scales.view(1, -1))
@@ -44,6 +47,7 @@ def smooth_lm(model, scales, alpha=0.5):
             fc1 = module.fc1
             fc1_input_scales = scales[name + '.fc1']
             smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, alpha)
+            print(f'Smoothed {name}')
         elif isinstance(module, BloomBlock):
             attn_ln = module.input_layernorm
             qkv = module.self_attention.query_key_value
@@ -54,3 +58,17 @@ def smooth_lm(model, scales, alpha=0.5):
             fc1 = module.mlp.dense_h_to_4h
             fc1_input_scales = scales[name + '.mlp.dense_h_to_4h']
             smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, alpha)
+            print(f'Smoothed {name}')
+        # TODO(xunkai): Get rid of this hack
+        elif module.__class__.__name__ == 'GLMBlock':
+            attn_ln = module.input_layernorm
+            qkv = module.self_attention.query_key_value
+            qkv_input_scales = scales[name + '.self_attention.query_key_value']
+            smooth_ln_fcs(attn_ln, qkv, qkv_input_scales, alpha)
+
+            ffn_ln = module.post_attention_layernorm
+            fc1 = module.mlp.dense_h_to_4h
+            fc1_input_scales = scales[name + '.mlp.dense_h_to_4h']
+            smooth_ln_fcs(ffn_ln, fc1, fc1_input_scales, alpha)
+            print(f'Smoothed ChatGLM block: {name}')
+
